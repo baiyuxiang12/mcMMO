@@ -1,52 +1,47 @@
-# This workflow automatically tests new commits and pull requests as they come in.
-# Note that this does not upload any artifacts, you will need to compile mcMMO manually
-# if you wish to create the actual jar.
-name: Compile and test
+name: Java 17 Build and Release
 
 on:
-  # We run our tests whenever the pom or a source file was touched.
-  # There is no need to run Maven when only the changelog was touched.
-  # We may also want to re-run this workflow when the workflow file itself
-  # was updated too.
   push:
-    paths:
-    - 'src/**'
-    - 'pom.xml'
-    - '.github/workflows/maven.yml'
-
-  # Whenever someone submits a new pull request which modified the pom or a source file,
-  # we want to ensure it compiles successfully and that all tests will pass.
-  pull_request:
-    paths:
-    - 'src/**'
-    - 'pom.xml'
+    tags:
+      - 'v*'
 
 jobs:
-  compile:
-    name: Maven compiler
+  build:
     runs-on: ubuntu-latest
+    
     steps:
+    - uses: actions/checkout@v4
 
-    # 1. Check out the current working tree
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    # 2. Setup Java 17 JDK (Adopt)
-    - name: Java 17 setup
-      uses: actions/setup-java@v4
+    # 设置 Java 17
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
       with:
-        distribution: 'adopt'
-        java-package: jdk
         java-version: '17'
+        distribution: 'temurin'
+        cache: 'maven'
 
-    # 3. Setup local Maven package cache to speed up building
-    - name: Cache Maven packages
-      uses: actions/cache@v4
+    # 构建并生成带依赖的fat jar
+    - name: Build with Maven
+      run: |
+        mvn clean package
+        jar --list --file target/*.jar | grep org/spigotmc  # 验证spigot依赖
+
+    # 创建版本发布
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
       with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
+        tag_name: ${{ github.ref_name }}
+        files: |
+          target/*.jar
+          LICENSE
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # 4. Build via Maven 
-    - name: Build via Maven
-      run: mvn verify -B --file pom.xml -DdisableXmlReport=true
+    # 可选：上传到Maven仓库
+    - name: Publish to Maven Central
+      if: success()
+      run: mvn deploy -DskipTests
+      env:
+        MAVEN_USERNAME: ${{ secrets.OSS_USERNAME }}
+        MAVEN_PASSWORD: ${{ secrets.OSS_PASSWORD }}
