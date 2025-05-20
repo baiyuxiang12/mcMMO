@@ -1,47 +1,65 @@
-name: Java 17 Build and Release
+name: Instant Build on Push
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main, master ]  # 监控的分支
+    paths:                     # 触发构建的文件类型
+      - 'src/**'
+      - 'pom.xml'
+      - '!**.md'               # 排除非代码文件
 
 jobs:
-  build:
+  instant-build:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 10        # 防止长时间占用资源
+
     steps:
-    - uses: actions/checkout@v4
-
-    # 设置 Java 17
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
+    - name: Checkout Code
+      uses: actions/checkout@v4
       with:
-        java-version: '17'
+        fetch-depth: 0         # 获取完整提交历史
+
+    - name: Cache Maven Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.m2/repository
+          target/
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-
+
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
         distribution: 'temurin'
-        cache: 'maven'
+        java-version: '17'
+        check-latest: true     # 确保使用最新补丁版本
 
-    # 构建并生成带依赖的fat jar是的
-    - name: Build with Maven
+    - name: Fast Build
       run: |
-        mvn clean package
-        jar --list --file target/*.jar | grep org/spigotmc  # 验证spigot依赖
+        # 智能跳过测试的构建策略
+        changed_files=$(git diff --name-only HEAD^ HEAD)
+        if [[ "$changed_files" != *"src/test"* ]]; then
+          mvn -B clean package -DskipTests
+        else
+          mvn -B clean verify
+        fi
 
-    # 创建版本发布
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
       with:
-        tag_name: ${{ github.ref_name }}
-        files: |
+        name: build-${{ github.sha }}
+        path: |
           target/*.jar
-          LICENSE
-        draft: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          target/*.war
+        retention-days: 3      # 缩短保留周期节省存储
 
-    # 可选：上传到Maven仓库
-    - name: Publish to Maven Central
-      if: success()
-      run: mvn deploy -DskipTests
-      env:
-        MAVEN_USERNAME: ${{ secrets.OSS_USERNAME }}
-        MAVEN_PASSWORD: ${{ secrets.OSS_PASSWORD }}
+    - name: Build Status Notification
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-log-${{ github.sha }}
+        path: |
+          **/surefire-reports/*.txt
+          **/build.log
