@@ -20,7 +20,7 @@ jobs:
         distribution: 'temurin'
         cache: 'maven'
 
-    # 构建并生成带依赖的fat jar
+    # 构建并生成带依赖的fat jar是的
     - name: Build with Maven
       run: |
         mvn clean package
