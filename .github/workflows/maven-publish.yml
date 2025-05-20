@@ -1,54 +1,65 @@
-name: Java 17 Maven Package
+name: Instant Build on Push
 
 on:
-  release:
-    types: [created]
+  push:
+    branches: [ main, master ]  # 监控的分支
+    paths:                     # 触发构建的文件类型
+      - 'src/**'
+      - 'pom.xml'
+      - '!**.md'               # 排除非代码文件
 
 jobs:
-  build:
+  instant-build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 10        # 防止长时间占用资源
 
     steps:
-    - uses: actions/checkout@v4
-    
-    # 设置 Java 17 环境
-    - name: Set up JDK 17
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0         # 获取完整提交历史
+
+    - name: Cache Maven Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.m2/repository
+          target/
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-
+
+    - name: Setup Java 17
       uses: actions/setup-java@v4
       with:
-        java-version: '17'
         distribution: 'temurin'
-        server-id: github
-        settings-path: ${{ github.workspace }}
-        cache: 'maven'  # 新增 Maven 依赖缓存
+        java-version: '17'
+        check-latest: true     # 确保使用最新补丁版本
 
-    # 验证 Java 版本
-    - name: Verify Java version
-      run: java -version
-
-    # 带智能缓存的构建
-    - name: Build with Maven
+    - name: Fast Build
       run: |
-        mvn -B verify -DskipTests
-        # 列出生成的 artifact 用于调试
-        ls -lh target/*.jar
+        # 智能跳过测试的构建策略
+        changed_files=$(git diff --name-only HEAD^ HEAD)
+        if [[ "$changed_files" != *"src/test"* ]]; then
+          mvn -B clean package -DskipTests
+        else
+          mvn -B clean verify
+        fi
 
-    # 发布到 GitHub Packages
-    - name: Publish to GitHub Packages
-      run: mvn deploy -s $GITHUB_WORKSPACE/settings.xml
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        MAVEN_USERNAME: ${{ github.actor }}
-        MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-
-    # 可选：上传到 Releases
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v1
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: target/*.jar
-        asset_name: ${{ github.event.repository.name }}-${{ github.event.release.tag_name }}.jar
-        asset_content_type: application/java-archive
-      if: success() && github.event_name == 'release'
+        name: build-${{ github.sha }}
+        path: |
+          target/*.jar
+          target/*.war
+        retention-days: 3      # 缩短保留周期节省存储
+
+    - name: Build Status Notification
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-log-${{ github.sha }}
+        path: |
+          **/surefire-reports/*.txt
+          **/build.log
